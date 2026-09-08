@@ -1,0 +1,104 @@
+# Evaluation cases.
+#
+# These are the brief's own sample questions plus its two stated stress tests.
+# Each case declares what a good answer must satisfy, so persona prompt changes
+# can be measured instead of eyeballed.
+#
+# `personas: [all]` fans the case out across all three personas and additionally
+# scores cross-persona divergence -- the property the whole design rests on.
+
+cases:
+  - id: cross_persona_capital_deployment
+    query: "Is this sector a good place to be putting money to work right now?"
+    sector: tech
+    personas: [all]
+    expects:
+      divergent_across_personas: true
+      min_companies_referenced: 1
+
+  - id: pe_buyout_targets_logistics
+    query: "Which companies in this sector look like attractive buyout targets based on the data you have?"
+    sector: logistics
+    personas: [pe_analyst]
+    expects:
+      min_companies_referenced: 3
+      min_evidence: 3
+
+  - id: mf_core_holding_retail
+    query: "Which of these companies would fit a long-term core holding versus a name I should avoid?"
+    sector: retail
+    personas: [mutual_fund_analyst]
+    expects:
+      min_companies_referenced: 2
+      min_evidence: 2
+
+  - id: equity_margin_profile_manufacturing
+    query: "Walk me through the margin profile of the companies in your data -- who's improving and who's under pressure?"
+    sector: manufacturing
+    personas: [equity_analyst]
+    expects:
+      min_companies_referenced: 2
+      cites_metrics: [ebitda_margin, net_margin]
+
+  - id: pe_take_private_tech
+    query: "If I had to pick one company here to take private, which would it be and what's the operational thesis?"
+    sector: tech
+    personas: [pe_analyst]
+    expects:
+      min_companies_referenced: 1
+      min_evidence: 2
+
+  - id: headcount_stress_test
+    query: "What's the most recent headcount or hiring signal you have for UPS?"
+    sector: logistics
+    personas: [pe_analyst]
+    expects:
+      # The default adapter loads no workforce data, so the only correct answer
+      # is that none is held. A number here is a fabrication.
+      admits_missing_signal: true
+      no_invented_headcount: true
+
+  - id: out_of_scope_company
+    query: "What do you think about Ferrari?"
+    sector: tech
+    personas: [equity_analyst]
+    expects:
+      out_of_scope_contains: ["Ferrari"]
+      not_referenced: ["Ferrari"]
+
+  - id: out_of_scope_sector
+    query: "How do you see the biotech sector shaping up?"
+    sector: tech
+    personas: [mutual_fund_analyst]
+    expects:
+      # The agent covers four sectors; biotech is not one of them and it must
+      # not quietly answer as though it were.
+      mentions_scope_limit: true
+
+# Concepts each persona's prose is expected to engage with. Scored as
+# "at least one term from each group appears", so a persona can express an idea
+# in its own words rather than matching a single phrase.
+persona_rubrics:
+  mutual_fund_analyst:
+    - name: benchmark_relative
+      any_of: ["sector median", "median", "benchmark", "relative to", "peer", "index"]
+    - name: position_or_portfolio
+      any_of: ["position", "portfolio", "holding", "weight", "sizing", "core"]
+    - name: durability
+      any_of: ["growth", "durable", "sustainable", "compound", "quality"]
+
+  equity_analyst:
+    - name: margins
+      any_of: ["margin", "ebitda", "profitability", "operating leverage"]
+    - name: valuation
+      any_of: ["multiple", "p/e", "pe ratio", "valuation", "earnings yield", "cheap", "expensive"]
+    - name: earnings
+      any_of: ["earnings", "eps", "revenue", "top line"]
+
+  pe_analyst:
+    - name: entry_multiple
+      any_of: ["entry multiple", "ev/ebitda", "ev to ebitda", "entry", "multiple"]
+    - name: leverage_or_cash
+      any_of: ["leverage", "debt", "turns", "cash flow", "fcf", "cash generation"]
+    - name: operational_or_exit
+      any_of: ["operational", "operating levers", "exit", "take private", "sponsor", "thesis"]

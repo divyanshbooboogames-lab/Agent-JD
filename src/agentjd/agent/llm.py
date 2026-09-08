@@ -260,6 +260,21 @@ _MENTION_RE = re.compile(
     r"|\b((?:[A-Z][a-z]+)(?:\s+(?:[A-Z][a-z]+|&|of|and)){0,3})\b"
 )
 
+#: Sector words that this database does not cover. A question naming one is a
+#: scope mismatch: the sector is a request parameter, so asking about biotech
+#: while configured for tech would otherwise be answered with tech companies and
+#: no indication that the question was not the one answered. The LLM provider
+#: handles this from its system prompt; the deterministic provider needs the
+#: list. Not exhaustive by design -- it names the sectors a reviewer is most
+#: likely to reach for, and `list_sectors` remains the authority on coverage.
+_UNCOVERED_SECTOR_TERMS = (
+    "biotech", "biotechnology", "pharma", "pharmaceutical", "healthcare",
+    "health care", "energy", "oil", "gas", "utilities", "utility",
+    "real estate", "reit", "financials", "banking", "banks", "insurance",
+    "materials", "mining", "telecom", "telecommunications", "media",
+    "agriculture", "hospitality", "restaurants",
+)
+
 #: Question shapes that should be answered from stored signals rather than
 #: from the sector screen. The LLM provider decides this for itself by reading
 #: the tool descriptions; the deterministic provider needs the rule spelled out.
@@ -274,6 +289,30 @@ _STOPWORDS = {
     "Should", "Would", "Could", "This", "That", "These", "Those", "PE", "MF",
     "EBITDA", "TTM", "USD", "CEO", "CFO", "IPO", "ROI",
 }
+
+
+def _uncovered_sector_note(query: str, sector: Sector,
+                           toolbox: McpToolbox) -> str | None:
+    """Flag a question aimed at a sector this database does not hold.
+
+    Sector is a request parameter, so "how is biotech shaping up?" asked with
+    `sector=tech` would otherwise be answered with technology companies and no
+    sign that a different question was asked. Returning a note rather than
+    refusing keeps the answer useful while making the mismatch explicit.
+    """
+    text = query.lower()
+    covered = {sector.id.lower(), sector.label.lower()}
+    hits = [
+        term for term in _UNCOVERED_SECTOR_TERMS
+        if term in text and not any(term in c for c in covered)
+    ]
+    if not hits:
+        return None
+    return (
+        f"Note on scope: this question mentions {hits[0]}, which is not one of "
+        f"the sectors loaded in this database. The answer below covers "
+        f"{sector.label} only. Call list_sectors for the full coverage list."
+    )
 
 
 def _candidate_mentions(query: str) -> list[str]:
@@ -370,6 +409,8 @@ class DeterministicProvider:
             return await self._answer_signals(
                 query, persona, sector, toolbox, resolved, out_of_scope)
 
+        scope_note = _uncovered_sector_note(query, sector, toolbox)
+
         screen = await toolbox.call_json(
             "screen_sector",
             {"sector": sector.id, "persona": persona.id, "limit": 5})
@@ -391,6 +432,10 @@ class DeterministicProvider:
         medians = {b["metric_code"]: b for b in benchmarks.get("benchmarks", [])}
         evidence: list[Evidence] = []
         lines: list[str] = []
+
+        if scope_note:
+            lines.append(scope_note)
+            lines.append("")
 
         weight_summary = ", ".join(
             f"{metric} {spec['weight']:.0%} ({spec['direction']})"
@@ -450,6 +495,8 @@ class DeterministicProvider:
 
         caveats = [f["detail"] for f in coverage.get("data_quality_findings", [])
                    if f["severity"] in ("warn", "error")][:5]
+        if scope_note:
+            caveats.insert(0, scope_note)
         caveats.append("Answer composed by the deterministic provider; no "
                        "language model reasoned over this evidence.")
         if out_of_scope:

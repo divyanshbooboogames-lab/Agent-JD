@@ -35,8 +35,9 @@ Reproduce it with `make demo`. No API key required.
 make install                 # venv + dependencies
 cp .env.example .env         # add ANTHROPIC_API_KEY for full answers
 make db                      # build the database (~15s, GitHub only)
-make test                    # 68 tests
+make test                    # 91 tests
 make demo                    # persona divergence, no key needed
+make eval                    # score answers against the brief's questions
 
 make api                     # REST on http://127.0.0.1:8000  (/docs for OpenAPI)
 make ui                      # Streamlit on http://localhost:8501
@@ -362,7 +363,7 @@ untouched rather than being mistaken for a capability problem.
 ## Testing
 
 ```bash
-make test     # 68 tests, no network, no API key
+make test     # 91 tests, no network, no API key
 ```
 
 Tests build their own small fixture database rather than leaning on the
@@ -406,6 +407,67 @@ required fields listed, which risks a 400 or silently dropped fields.
 
 ---
 
+---
+
+## Evaluating the personas
+
+Ranking divergence is unit-tested. That proves the personas *retrieve*
+differently; it does not prove an answer reasons like the role, or that it
+stayed inside the data. `make eval` scores both against the brief's own
+questions plus its two stated stress tests (`evals/cases.yaml`).
+
+```
+By dimension
+  grounding    1.00  ##################
+  discipline   1.00  ##################
+  persona      0.60  ###########.......
+  OVERALL      0.87  ################..
+```
+
+Three dimensions, deliberately not weighted equally in consequence:
+
+- **grounding** — did it stay inside the data? Invented companies, evidence
+  attributed to unknown tickers, an undeclared out-of-scope company, or a
+  headcount figure asserted for a company with no stored signal. These are
+  *critical*: any one of them zeroes the case, because fluent invention is
+  worse than an unhelpful answer.
+- **discipline** — did it retrieve, cite, qualify and calibrate? Includes
+  flagging "high" confidence on fewer than two pieces of evidence.
+- **persona** — did the prose engage with the concepts the role is defined by?
+  Entry multiple, leverage and exit for PE; benchmark-relative framing and
+  position sizing for the mutual fund analyst; margins, earnings and multiples
+  for the equity analyst.
+
+The case score is the mean of the three **dimension** scores, not of the
+individual checks. Grounding and discipline carry far more checks, so a flat
+per-check mean would let a perfect grounding score hide prose that never
+reasons like the role — which is the thing this eval exists to measure.
+
+Scores are only comparable within a provider. The 0.60 persona score above is
+the deterministic provider losing points by construction: it composes prose
+from templates and cannot argue an operational thesis. **That gap is the value
+the language model adds, expressed as a number** — re-run with an API key and
+the persona dimension is the one that should move.
+
+Two things the harness does to avoid flattering itself, both of which it
+initially failed:
+
+1. **It does not grade its own scaffolding.** The PE persona's section heading
+   is literally "Deal shape and entry multiple", so simply printing the heading
+   scored a match on the `entry_multiple` concept while saying nothing about
+   one. Headings are stripped before concept matching.
+2. **Its checks are tested against bad answers.** `tests/test_evals.py` feeds
+   the rubric invented companies, fabricated headcounts and collapsed
+   cross-persona rankings to confirm they actually fail — and feeds it honest
+   phrasing to confirm they do not false-positive.
+
+Writing the eval also surfaced a product bug: asked "how do you see the biotech
+sector shaping up?" while configured for tech, the agent answered about tech
+with no sign that a different question had been asked. It now flags the scope
+mismatch and says what it covers.
+
+For CI: `make eval` accepts `--fail-under 0.8` and `--json report.json`.
+
 ## What I would do next, with more time
 
 1. **Run the EDGAR adapter as the primary source.** It is written and its
@@ -419,11 +481,12 @@ required fields listed, which risks a 400 or silently dropped fields.
    a trajectory, which is what the equity persona actually wants — the brief's
    "who's improving and who's under pressure" question is currently answerable
    only as a cross-section.
-3. **Evaluate the personas rather than asserting they differ.** Ranking
-   divergence is tested; *answer quality* is not. I would build a small eval set
-   of the brief's questions with rubrics per persona (does the PE answer state
-   an entry multiple and an exit path? does the MF answer size the position?) and
-   score it, so persona prompt changes can be measured instead of eyeballed.
+3. **An LLM judge on top of the eval.** `make eval` scores grounding,
+   discipline and persona engagement, but persona engagement is keyword-based
+   and so measures whether the right *concepts* appear, not whether the
+   reasoning is any good. A model-graded rubric would catch an answer that says
+   "entry multiple" without underwriting one. That needs an API key, which is
+   why the deterministic layer came first.
 4. **Cache the persona screen and pre-warm the prompt.** The system prompt and
    tool list are stable per persona/sector pair — natural `cache_control`
    breakpoints that would cut latency and cost on repeat questions.

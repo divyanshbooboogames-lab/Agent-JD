@@ -1,4 +1,4 @@
-.PHONY: help install db db-edgar api ui mcp demo test clean
+.PHONY: help install db db-edgar api ui mcp demo test eval clean
 
 PY ?= python
 VENV := .venv
@@ -13,6 +13,7 @@ help:
 	@echo "make ui         run the Streamlit UI on :8501"
 	@echo "make mcp        run the MCP server standalone on stdio"
 	@echo "make test       run the test suite"
+	@echo "make eval       score the agent against the brief's questions"
 
 install:
 	$(PY) -m venv $(VENV)
@@ -40,6 +41,9 @@ mcp:
 
 test:
 	PYTHONPATH=src $(BIN)/python -m pytest tests/ -q
+
+eval:
+	PYTHONPATH=src $(BIN)/python -m agentjd.evals.runner
 
 clean:
 	rm -rf $(VENV) data/sector_intel.db .pytest_cache
