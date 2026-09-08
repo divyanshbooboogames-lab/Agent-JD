@@ -34,7 +34,11 @@ def connect(path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
                 f"database not found at {path}. Build it first: "
                 f"python -m agentjd.ingest.build_db"
             )
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        # Build the URI with `as_uri()` rather than f-string interpolation.
+        # Interpolating a raw path leaves Windows drive letters and backslashes
+        # (`file:C:\Users\...`) and unescaped spaces in a field that is parsed
+        # as a URI. `as_uri()` percent-encodes and normalises both.
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path)

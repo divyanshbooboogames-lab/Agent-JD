@@ -2,7 +2,7 @@
 name = "agentjd"
 version = "0.1.0"
 description = "Persona-configurable financial analyst agent over an MCP tool boundary"
-requires-python = ">=3.10"
+requires-python = ">=3.11"  # BaseExceptionGroup (agent/core.py) is 3.11+
 dependencies = [
     "mcp>=2.0",
     "anthropic>=1.0",

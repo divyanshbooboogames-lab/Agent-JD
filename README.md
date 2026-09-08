@@ -31,6 +31,10 @@ Reproduce it with `make demo`. No API key required.
 
 ## Quickstart
 
+Python **3.11 or newer** is required (the code uses `BaseExceptionGroup`).
+
+### macOS / Linux
+
 ```bash
 make install                 # venv + dependencies
 cp .env.example .env         # add ANTHROPIC_API_KEY for full answers
@@ -42,6 +46,37 @@ make eval                    # score answers against the brief's questions
 make api                     # REST on http://127.0.0.1:8000  (/docs for OpenAPI)
 make ui                      # Streamlit on http://localhost:8501
 ```
+
+### Windows (PowerShell)
+
+There is no `make` on Windows, so install the package in editable mode and call
+the modules directly. This is not a lesser path -- the editable install puts
+`agentjd` on the import path properly, so nothing needs `PYTHONPATH` and every
+command works from any directory.
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install -e .
+
+copy .env.example .env       # then add ANTHROPIC_API_KEY for full answers
+
+python -m agentjd.ingest.build_db --fresh      # build the database
+python -m pytest tests -q                      # 91 tests
+python scripts\demo_personas.py --sector tech  # persona divergence, no key
+python -m agentjd.evals.runner                 # score the answers
+
+uvicorn agentjd.api.main:app --port 8000       # REST + /docs
+streamlit run src\agentjd\ui\streamlit_app.py  # UI on :8501
+```
+
+If PowerShell blocks the activate script, either run
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned` for that
+session, or skip activation and call `.venv\Scripts\python.exe -m ...` directly.
+
+The same editable-install commands work on macOS and Linux if you would rather
+not use `make`.
 
 **Running without an API key.** Every entry point works with no credentials.
 With no key the agent falls back to a `deterministic` provider that still goes

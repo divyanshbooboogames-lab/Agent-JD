@@ -19,6 +19,7 @@ install:
 	$(PY) -m venv $(VENV)
 	$(BIN)/pip install --upgrade pip
 	$(BIN)/pip install -r requirements.txt
+	$(BIN)/pip install -e .
 	@echo "\nNow: cp .env.example .env && make db"
 
 db:
