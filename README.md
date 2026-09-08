@@ -35,7 +35,7 @@ Reproduce it with `make demo`. No API key required.
 make install                 # venv + dependencies
 cp .env.example .env         # add ANTHROPIC_API_KEY for full answers
 make db                      # build the database (~15s, GitHub only)
-make test                    # 50 tests
+make test                    # 68 tests
 make demo                    # persona divergence, no key needed
 
 make api                     # REST on http://127.0.0.1:8000  (/docs for OpenAPI)
@@ -348,15 +348,21 @@ effort level.
 Implementation notes: adaptive thinking (on by default for this model), a
 `json_schema` output constraint derived from the same pydantic model the API
 returns — so the response contract cannot drift between the two — and
-server-side refusal fallbacks enabled by default, degrading automatically if the
-account cannot use that beta.
+server-side refusal fallbacks enabled by default.
+
+Both of those last two are opportunistic. If the account or model rejects the
+fallback beta or the structured output format, `_create` retries once without
+that feature and remembers the downgrade, so an optional capability can never
+cost the whole request. The downgrade requires the error to name the feature
+*and* read as a rejection — auth failures, timeouts and rate limits propagate
+untouched rather than being mistaken for a capability problem.
 
 ---
 
 ## Testing
 
 ```bash
-make test     # 50 tests, no network, no API key
+make test     # 68 tests, no network, no API key
 ```
 
 Tests build their own small fixture database rather than leaning on the
@@ -370,6 +376,33 @@ are arithmetically correct and refuse to emit values with bad denominators; the
 MCP tool surface round-trips over a real client; read-only enforcement;
 out-of-scope and missing-signal honesty paths; and the API's structured-response
 contract.
+
+**The agentic loop is tested against a scripted Messages API**
+(`tests/fake_anthropic.py`). Without an API key that loop is the one part of
+the system that cannot run end to end, so rather than ship it unexecuted the
+fake supplies scripted responses while the MCP tools underneath stay real -- a
+scripted tool call really does query the fixture database. The suite drives
+single-round answers, multi-round and parallel tool use, budget exhaustion,
+`pause_turn`, refusals, malformed and empty responses, failing and unknown
+tools, and the optional-feature downgrades. It asserts on the outbound request
+shape too: user/assistant role alternation, `tool_use`/`tool_result` pairing,
+and that the forced final call disables tools.
+
+Writing it found three real bugs, all now fixed:
+
+1. The budget-exhaustion path appended a second consecutive user message, which
+   the Messages API rejects outright -- so hitting the tool limit was a
+   guaranteed 400 rather than a graceful "answer with what you have".
+2. That same forced call still offered tools, letting the model spend its last
+   turn on another tool call and return a response with no text block.
+3. Errors raised inside the MCP session came back wrapped in an anyio
+   `ExceptionGroup`, so an authentication failure surfaced over HTTP as
+   "unhandled errors in a TaskGroup (1 sub-exception)" with the real cause
+   invisible. `Agent.ask` now unwraps a lone leaf.
+
+The structured-output schema is also strict-compatible now: pydantic emits
+nested models without `additionalProperties: false` and with only genuinely
+required fields listed, which risks a 400 or silently dropped fields.
 
 ---
 

@@ -46,32 +46,59 @@ class LLMProvider(Protocol):
 class AnthropicProvider:
     """Manual agentic loop over the Messages API."""
 
-    def __init__(self, settings: Settings) -> None:
-        from anthropic import AsyncAnthropic  # imported lazily: optional at runtime
-
+    def __init__(self, settings: Settings, client: Any | None = None) -> None:
         self.settings = settings
         self.name = "anthropic"
         self.model = settings.model
-        self._client = AsyncAnthropic(api_key=settings.anthropic_api_key or None)
+        if client is None:
+            from anthropic import AsyncAnthropic  # lazy: optional at runtime
+
+            client = AsyncAnthropic(api_key=settings.anthropic_api_key or None)
+        self._client = client
         # Server-side fallbacks route around a safety refusal instead of
-        # returning nothing. Disabled automatically if the account cannot use
-        # the beta -- see `_create`.
+        # returning nothing. Both this and the structured-output format are
+        # dropped automatically if the account or model rejects them, so an
+        # optional feature can never cost the whole request -- see `_create`.
         self._use_fallbacks = True
+        self._use_output_format = True
 
     async def _create(self, **kwargs: Any) -> Any:
-        """Send one request, degrading gracefully if the fallback beta is off."""
-        if self._use_fallbacks:
+        """Send one request, degrading past optional features rather than failing.
+
+        Two capabilities are opportunistic: the server-side refusal fallback
+        beta, and the structured `output_config.format`. Each is retried once
+        without the feature if the API rejects it specifically, and the
+        downgrade is remembered so later rounds do not repeat the round trip.
+        """
+        for _ in range(3):
             try:
-                return await self._client.beta.messages.create(
-                    betas=["server-side-fallback-2026-07-01"],
-                    fallbacks="default",
-                    **kwargs,
-                )
+                if self._use_fallbacks:
+                    return await self._client.beta.messages.create(
+                        betas=["server-side-fallback-2026-07-01"],
+                        fallbacks="default",
+                        **kwargs,
+                    )
+                return await self._client.messages.create(**kwargs)
             except Exception as exc:  # noqa: BLE001
-                if not _is_beta_rejection(exc):
-                    raise
-                self._use_fallbacks = False
-        return await self._client.messages.create(**kwargs)
+                if self._use_fallbacks and _rejects_feature(exc, _FALLBACK_MARKERS):
+                    self._use_fallbacks = False
+                    continue
+                if (self._use_output_format
+                        and "output_config" in kwargs
+                        and _rejects_feature(exc, _OUTPUT_FORMAT_MARKERS)):
+                    # Fall back to asking for JSON in the prompt; `_parse_answer`
+                    # already tolerates a response that is not clean JSON.
+                    self._use_output_format = False
+                    kwargs = dict(kwargs)
+                    config = dict(kwargs["output_config"])
+                    config.pop("format", None)
+                    if config:
+                        kwargs["output_config"] = config
+                    else:
+                        kwargs.pop("output_config")
+                    continue
+                raise
+        raise RuntimeError("exhausted retries downgrading optional API features")
 
     async def answer(self, *, query: str, persona: Persona, sector: Sector,
                      toolbox: McpToolbox, max_rounds: int) -> AgentAnswer:
@@ -121,22 +148,72 @@ class AnthropicProvider:
                 })
             messages.append({"role": "user", "content": results})
         else:
-            # Budget exhausted with tools still pending: ask for the answer now
-            # rather than returning a truncated tool transcript.
-            messages.append({
-                "role": "user",
-                "content": ("You have used the full tool budget. Answer now "
-                            "from what you already retrieved, and record the "
-                            "gap in caveats."),
-            })
-            response = await self._create(messages=messages, **request)
+            # Budget exhausted with tools still pending. Tools are forced off
+            # for this final call: leaving them available lets the model spend
+            # the turn on another tool call and return a response with no text
+            # block at all.
+            _append_final_nudge(messages)
+            response = await self._create(
+                messages=messages, tool_choice={"type": "none"}, **request)
 
         return _parse_answer(response, persona)
 
 
-def _is_beta_rejection(exc: Exception) -> bool:
-    text = str(exc).lower()
-    return any(s in text for s in ("beta", "fallbacks", "unexpected keyword"))
+_FINAL_NUDGE = (
+    "You have used the full tool budget and no more tool calls are available. "
+    "Answer now from what you have already retrieved, and record the gap in "
+    "caveats."
+)
+
+#: Error text that means "this account/model does not accept that feature",
+#: as opposed to a transport or auth failure that must not be swallowed.
+_REJECTION_SIGNALS = ("unexpected keyword", "unsupported", "not supported",
+                      "invalid_request", "400", "unrecognized", "unknown field")
+_FALLBACK_MARKERS = ("beta", "fallback")
+_OUTPUT_FORMAT_MARKERS = ("output_config", "output_format", "json_schema",
+                          "schema")
+
+
+def _rejects_feature(exc: Exception, markers: tuple[str, ...]) -> bool:
+    """True when the error names this feature AND reads as a rejection.
+
+    Both halves matter. Matching a feature name alone would treat an unrelated
+    network error whose message happens to contain "schema" as a reason to
+    silently downgrade; requiring a rejection signal keeps auth failures,
+    timeouts and rate limits propagating to the caller.
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return (any(m in text for m in markers)
+            and any(s in text for s in _REJECTION_SIGNALS))
+
+
+def _append_final_nudge(messages: list[dict[str, Any]]) -> None:
+    """Ask for the answer without breaking user/assistant alternation.
+
+    The Messages API rejects two consecutive user turns, so where the
+    conversation already ends with one -- the usual case, a tool-result turn --
+    the instruction is appended to that turn's content instead of being sent as
+    a new message. After a `pause_turn` the last turn is the assistant's, and a
+    fresh user message is the correct shape.
+    """
+    if not messages:
+        messages.append({"role": "user", "content": _FINAL_NUDGE})
+        return
+
+    last = messages[-1]
+    if last.get("role") != "user":
+        messages.append({"role": "user", "content": _FINAL_NUDGE})
+        return
+
+    content = last.get("content")
+    nudge = {"type": "text", "text": _FINAL_NUDGE}
+    if isinstance(content, list):
+        messages[-1] = {"role": "user", "content": [*content, nudge]}
+    else:
+        messages[-1] = {
+            "role": "user",
+            "content": [{"type": "text", "text": str(content)}, nudge],
+        }
 
 
 def _refusal_answer(response: Any, persona: Persona) -> AgentAnswer:

@@ -103,9 +103,33 @@ class AgentResponse(AgentAnswer):
         return cls(**answer.model_dump(), **meta)
 
 
+def _strictify(node: Any) -> Any:
+    """Make a pydantic-generated schema acceptable as a strict output format.
+
+    Structured output requires every object in the schema -- not just the root
+    -- to declare `additionalProperties: false` and to list all its properties
+    as `required`. Pydantic emits neither for nested models (`Evidence` came
+    back with `required: ["metric"]` and no `additionalProperties`), which
+    either trips a 400 or lets the model silently omit fields.
+
+    Optional fields stay optional in Python: they are typed `X | None`, so a
+    required-but-null value still validates on the way back in. The effect is
+    that the model must decide about every field rather than quietly dropping
+    the ones it has nothing to say about.
+    """
+    if isinstance(node, dict):
+        out = {k: _strictify(v) for k, v in node.items()}
+        if isinstance(out.get("properties"), dict):
+            out["additionalProperties"] = False
+            out["required"] = list(out["properties"])
+        return out
+    if isinstance(node, list):
+        return [_strictify(v) for v in node]
+    return node
+
+
 #: JSON Schema handed to the model via `output_config.format`. Derived from the
-#: pydantic model so the contract cannot drift between the two.
+#: pydantic model so the response contract cannot drift between what the model
+#: is asked for and what the API returns.
 def answer_json_schema() -> dict[str, Any]:
-    schema = AgentAnswer.model_json_schema()
-    schema["additionalProperties"] = False
-    return schema
+    return _strictify(AgentAnswer.model_json_schema())

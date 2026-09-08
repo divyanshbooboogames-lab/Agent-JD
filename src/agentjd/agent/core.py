@@ -41,12 +41,21 @@ class Agent:
         provider = build_provider(self.settings)
         rounds = request.max_tool_rounds or self.settings.max_tool_rounds
 
-        async with open_toolbox(self._mcp_server) as toolbox:
-            answer = await provider.answer(
-                query=request.query, persona=persona, sector=sector,
-                toolbox=toolbox, max_rounds=rounds)
-            sources = await self._collect_sources(toolbox)
-            tool_calls = list(toolbox.calls)
+        try:
+            async with open_toolbox(self._mcp_server) as toolbox:
+                answer = await provider.answer(
+                    query=request.query, persona=persona, sector=sector,
+                    toolbox=toolbox, max_rounds=rounds)
+                sources = await self._collect_sources(toolbox)
+                tool_calls = list(toolbox.calls)
+        except BaseExceptionGroup as group:  # noqa: F821 - builtin on 3.11+
+            # The MCP session runs under an anyio task group, which repackages
+            # anything raised inside it as an ExceptionGroup. Left alone, a
+            # plain auth failure reaches the API layer as "unhandled errors in
+            # a TaskGroup (1 sub-exception)" and the real cause is invisible in
+            # the HTTP response. Unwrap a lone leaf so callers see what
+            # actually failed.
+            raise _sole_cause(group) from None
 
         return AgentResponse.from_answer(
             answer,
@@ -77,6 +86,18 @@ class Agent:
             toolbox.calls.pop()
         return [f"{s['name']} ({s.get('license') or 'licence unstated'})"
                 for s in coverage.get("sources", [])]
+
+
+def _sole_cause(group: BaseException) -> BaseException:
+    """Unwrap nested exception groups down to a single underlying error.
+
+    Returns the group itself when it genuinely carries more than one failure,
+    since collapsing those would hide information.
+    """
+    current = group
+    while isinstance(current, BaseExceptionGroup) and len(current.exceptions) == 1:  # noqa: F821
+        current = current.exceptions[0]
+    return current
 
 
 def available_options() -> dict[str, Any]:
