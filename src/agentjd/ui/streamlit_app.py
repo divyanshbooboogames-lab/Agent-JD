@@ -21,6 +21,7 @@ if str(SRC) not in sys.path:
 import streamlit as st  # noqa: E402
 
 from agentjd.agent.core import Agent, available_options  # noqa: E402
+from agentjd.agent.errors import classify  # noqa: E402
 from agentjd.agent.schemas import AgentRequest  # noqa: E402
 from agentjd.settings import get_settings  # noqa: E402
 
@@ -45,6 +46,13 @@ SAMPLE_QUESTIONS = [
 @st.cache_resource
 def get_agent() -> Agent:
     return Agent()
+
+
+@st.cache_resource
+def deterministic_agent() -> Agent:
+    """A no-LLM agent, used when the provider is unreachable."""
+    return Agent(settings=get_settings().model_copy(
+        update={"llm_provider": "deterministic"}))
 
 
 @st.cache_data
@@ -77,6 +85,8 @@ def main() -> None:
         provider = settings.effective_provider()
         if provider == "anthropic":
             st.success(f"LLM: {settings.model}")
+            st.caption("A key is configured. Whether the account can actually "
+                       "serve a request is only known once one is made.")
         else:
             st.warning(
                 "Running the deterministic provider (no API key found). "
@@ -94,14 +104,32 @@ def main() -> None:
                          placeholder="Ask about this sector...")
 
     if st.button("Ask", type="primary", disabled=not query.strip()):
+        request = AgentRequest(query=query.strip(), persona=persona["id"],
+                               sector=sector["id"])
+        degraded = False
         with st.spinner(f"Thinking as a {persona['label']}..."):
             try:
-                response = get_agent().ask_sync(AgentRequest(
-                    query=query.strip(), persona=persona["id"],
-                    sector=sector["id"]))
+                response = get_agent().ask_sync(request)
             except Exception as exc:  # noqa: BLE001
-                st.error(f"{type(exc).__name__}: {exc}")
-                return
+                failure = classify(exc)
+                st.error(f"**{failure.title}**\n\n{failure.remedy}")
+                with st.expander("Full provider response"):
+                    st.code(str(exc))
+                if not failure.degradable:
+                    return
+                # The database and the MCP layer are unaffected, so answer from
+                # them rather than leaving the user with only an error. The
+                # response labels its own provider, so this is never passed off
+                # as a model-written answer.
+                st.info("Answering with the deterministic provider instead, so "
+                        "you can still see the retrieval and the persona "
+                        "weighting. The prose is templated, not reasoned.")
+                degraded = True
+                try:
+                    response = deterministic_agent().ask_sync(request)
+                except Exception as inner:  # noqa: BLE001
+                    st.error(f"The deterministic fallback also failed: {inner}")
+                    return
 
         st.markdown(f"### {response.persona_label} on {response.sector_label}")
         st.markdown(response.answer)

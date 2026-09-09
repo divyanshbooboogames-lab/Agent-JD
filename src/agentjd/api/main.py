@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..agent.core import Agent, available_options
+from ..agent.errors import classify
 from ..agent.schemas import AgentRequest, AgentResponse
 from ..config import load_personas, load_sectors
 from ..settings import get_settings
@@ -87,6 +88,11 @@ async def ask(request: AgentRequest) -> AgentResponse:
     try:
         return await _agent.ask(request)
     except Exception as exc:  # noqa: BLE001
+        # Provider failures are operational, not bugs in the request, and each
+        # has a specific remedy. Return that rather than a raw exception repr,
+        # and use 502 so a caller can tell "the upstream model failed" from
+        # "this service is broken".
+        failure = classify(exc)
         raise HTTPException(
-            status_code=500,
-            detail={"error": type(exc).__name__, "detail": str(exc)}) from exc
+            status_code=502,
+            detail={**failure.as_dict(), "detail": str(exc)}) from exc

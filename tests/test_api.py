@@ -85,3 +85,27 @@ def test_invalid_selectors_are_rejected_with_the_valid_set(client, payload, fiel
 def test_empty_query_is_rejected_by_validation(client):
     assert client.post("/v1/ask", json={
         "query": "", "persona": "pe_analyst", "sector": "tech"}).status_code == 422
+
+
+def test_provider_failure_returns_an_actionable_502(monkeypatch, client):
+    """A provider failure is an upstream problem with a specific remedy, not a
+    bug in the request -- the caller should be told which, and what to do."""
+    from agentjd.api import main as api_main
+
+    async def boom(_request):
+        raise RuntimeError(
+            "BadRequestError: Error code: 400 - {'type': 'error', 'error': "
+            "{'type': 'invalid_request_error', 'message': 'Your credit balance "
+            "is too low to access the Anthropic API.'}}")
+
+    monkeypatch.setattr(api_main._agent, "ask", boom)
+    response = client.post("/v1/ask", json={
+        "query": "anything", "persona": "pe_analyst", "sector": "tech"})
+
+    assert response.status_code == 502, "502 distinguishes upstream from local"
+    detail = response.json()["detail"]
+    assert detail["error"] == "insufficient_credit"
+    assert "Plans & Billing" in detail["remedy"]
+    assert detail["retryable"] is True
+    # The raw provider text is still available for debugging.
+    assert "credit balance" in detail["detail"]
