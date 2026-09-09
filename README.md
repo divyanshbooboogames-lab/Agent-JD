@@ -13,19 +13,27 @@ the language model.
 
 ```
 Sector: Technology -- 64 companies, identical universe for all three
+Data:   built 2026-09-09 from a daily-refreshed upstream snapshot
 
 MF Analyst              Equity Analyst          PE Analyst
 --------------------    --------------------    --------------------
 1. MU     0.79          1. FSLR   0.86          1. HPQ    0.86
-2. MSFT   0.78          2. MU     0.85          2. ACN    0.86
-3. NVDA   0.77          3. FICO   0.83          3. CTSH   0.81
-4. ORCL   0.76          4. VRSN   0.83          4. SMCI   0.81
-5. AVGO   0.73          5. PTC    0.83          5. HPE    0.80
+2. MSFT   0.79          2. MU     0.85          2. ACN    0.86
+3. NVDA   0.77          3. WDC    0.85          3. CTSH   0.82
+4. ORCL   0.75          4. VRSN   0.84          4. SMCI   0.80
+5. ADBE   0.72          5. FICO   0.83          5. HPE    0.79
 
 Names appearing in all three top-5: none
 ```
 
 Reproduce it with `make demo`. No API key required.
+
+**Your run will not match this table exactly, and that is expected.** The
+upstream market snapshot refreshes daily, so a rebuild moves prices, multiples
+and therefore the ordering; `make demo` prints the build date alongside the
+table for that reason. What holds across builds is the property being
+demonstrated: the three personas do not converge. The last line is the one to
+read.
 
 ---
 

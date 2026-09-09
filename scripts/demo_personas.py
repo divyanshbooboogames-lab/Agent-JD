@@ -24,10 +24,34 @@ from agentjd.formatting import pct_rank  # noqa: E402
 PERSONAS = ["mutual_fund_analyst", "equity_analyst", "pe_analyst"]
 
 
+def _build_date() -> str:
+    """When this database was ingested.
+
+    Printed with the table because the upstream market snapshot refreshes
+    daily: the specific tickers below are a point-in-time result, while the
+    property being demonstrated -- that the three personas do not converge --
+    holds across builds. Without a date on the output, a reader comparing it to
+    a figure in the README would reasonably conclude one of them is wrong.
+    """
+    from agentjd.db.store import connect
+    from agentjd.settings import get_settings
+
+    try:
+        with connect(get_settings().resolved_db_path, read_only=True) as conn:
+            row = conn.execute(
+                "SELECT started_at FROM ingest_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return (row[0][:10] if row and row[0] else "unknown date")
+    except Exception:  # noqa: BLE001 - a missing date must not break the demo
+        return "unknown date"
+
+
 async def run(sector: str, limit: int) -> None:
     sectors = load_sectors()
     personas = load_personas()
     print(f"\nSector: {sectors[sector].label}")
+    print(f"Data:   built {_build_date()} from a daily-refreshed upstream "
+          f"snapshot -- exact names drift between builds")
     print(f"Question: 'Is this sector a good place to put money to work, and "
           f"which names?'\n")
 
