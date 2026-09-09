@@ -43,6 +43,20 @@ SAMPLE_QUESTIONS = [
 ]
 
 
+def md(text: str) -> str:
+    """Escape text before handing it to Streamlit's markdown renderer.
+
+    Streamlit reads `$...$` as LaTeX, so a line carrying two dollar amounts --
+    "median eps: $8 (IQR $3 to $12)" -- is silently swallowed into a maths
+    block and the numbers vanish. Answers are full of currency, so every one
+    of them has to be escaped on the way to the screen.
+
+    Only the display layer needs this. The API returns the text unmodified,
+    because a JSON consumer wants the real string.
+    """
+    return text.replace("$", r"\$")
+
+
 @st.cache_resource
 def get_agent() -> Agent:
     return Agent()
@@ -112,7 +126,7 @@ def main() -> None:
                 response = get_agent().ask_sync(request)
             except Exception as exc:  # noqa: BLE001
                 failure = classify(exc)
-                st.error(f"**{failure.title}**\n\n{failure.remedy}")
+                st.error(md(f"**{failure.title}**\n\n{failure.remedy}"))
                 with st.expander("Full provider response"):
                     st.code(str(exc))
                 if not failure.degradable:
@@ -132,7 +146,7 @@ def main() -> None:
                     return
 
         st.markdown(f"### {response.persona_label} on {response.sector_label}")
-        st.markdown(response.answer)
+        st.markdown(md(response.answer))
 
         cols = st.columns(4)
         cols[0].metric("Confidence", response.confidence)
@@ -141,8 +155,8 @@ def main() -> None:
         cols[3].metric("Elapsed", f"{response.elapsed_ms / 1000:.1f}s")
 
         if response.out_of_scope:
-            st.warning("Not in this database, so not analysed: "
-                       + ", ".join(response.out_of_scope))
+            st.warning(md("Not in this database, so not analysed: "
+                          + ", ".join(response.out_of_scope)))
 
         if response.evidence:
             st.markdown("#### Evidence")
@@ -163,7 +177,7 @@ def main() -> None:
         if response.caveats:
             with st.expander(f"Data caveats ({len(response.caveats)})"):
                 for c in response.caveats:
-                    st.markdown(f"- {c}")
+                    st.markdown(md(f"- {c}"))
 
         with st.expander(f"MCP tool trace ({len(response.tool_calls)} calls)"):
             st.caption("Every fact above arrived through one of these calls. "
