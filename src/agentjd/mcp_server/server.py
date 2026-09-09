@@ -21,13 +21,23 @@ talked into producing -- cannot write to or drop anything.
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 
+from ..config import load_personas, load_sectors
 from ..db import queries as q
 from ..db.store import connect
 from ..settings import get_settings
+
+# Constrain the two enumerable arguments in the tool schema itself, built from
+# the same YAML the agent reads -- so adding a sector still means editing one
+# config file, and the model is told the valid values rather than left to guess
+# from a description. A live run showed why this matters: the model called
+# screen_sector with persona="private equity", got an error payload back, and
+# burned a round trip recovering. An enum makes that call unrepresentable.
+SectorId = Literal[tuple(load_sectors())]      # type: ignore[valid-type]
+PersonaId = Literal[tuple(load_personas())]    # type: ignore[valid-type]
 
 mcp = MCPServer(
     name="agentjd-sector-intel",
@@ -70,7 +80,7 @@ def list_sectors() -> dict[str, Any]:
         "universe you are reasoning over before making sector-level claims."
     )
 )
-def list_companies(sector: str, limit: int = 50) -> dict[str, Any]:
+def list_companies(sector: SectorId, limit: int = 50) -> dict[str, Any]:
     """Args:
     sector: sector id, e.g. tech, retail, manufacturing, logistics.
     limit: maximum companies to return (capped at 100).
@@ -137,7 +147,7 @@ def get_company_signals(ticker: str, signal_type: str = "headcount") -> dict[str
         "than asserted."
     )
 )
-def screen_sector(sector: str, persona: str, limit: int = 10) -> dict[str, Any]:
+def screen_sector(sector: SectorId, persona: PersonaId, limit: int = 10) -> dict[str, Any]:
     """Args:
     sector: sector id, e.g. tech, retail, manufacturing, logistics.
     persona: one of mutual_fund_analyst, equity_analyst, pe_analyst.
@@ -155,7 +165,7 @@ def screen_sector(sector: str, persona: str, limit: int = 10) -> dict[str, Any]:
         "anchored to a real number."
     )
 )
-def get_sector_benchmarks(sector: str, metrics: list[str] | None = None) -> dict[str, Any]:
+def get_sector_benchmarks(sector: SectorId, metrics: list[str] | None = None) -> dict[str, Any]:
     """Args:
     sector: sector id.
     metrics: optional metric codes to restrict to, e.g. ["pe_ratio"].
@@ -188,7 +198,7 @@ def compare_companies(tickers: list[str], metrics: list[str] | None = None) -> d
         "need to qualify an answer honestly."
     )
 )
-def describe_data_coverage(sector: str | None = None) -> dict[str, Any]:
+def describe_data_coverage(sector: SectorId | None = None) -> dict[str, Any]:
     """Args:
     sector: optional sector id to narrow the report to.
     """

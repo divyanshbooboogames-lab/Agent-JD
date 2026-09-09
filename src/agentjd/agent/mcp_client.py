@@ -61,6 +61,34 @@ def _result_text(result: Any) -> str:
     return "\n".join(parts) if parts else "{}"
 
 
+def _payload_is_error(text: str) -> bool:
+    """Whether a tool's payload reports a failure it handled itself.
+
+    MCP's `is_error` covers a tool that raised. It does not cover a tool that
+    returned normally while reporting a bad argument -- `screen_sector` with an
+    unknown persona answers with `{"error": "unknown_persona", ...}` and a
+    perfectly successful protocol response.
+
+    Without this, such a call was recorded `ok: true` and the result went back
+    to the model with no `is_error` marker: the audit trail claimed a retrieval
+    that never happened, and the model had to infer the failure from prose. The
+    response's tool log is supposed to be the one part of the output a model
+    cannot overstate, so it has to count these.
+
+    An absent record is not an error: `find_company` returning
+    `in_database: false` is a correct answer to a valid question, and carries no
+    `error` key.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith("{"):
+        return False
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and bool(payload.get("error"))
+
+
 def to_anthropic_tools(mcp_tools: list[Any]) -> list[dict[str, Any]]:
     """Translate MCP tool descriptors into Messages API tool definitions."""
     tools: list[dict[str, Any]] = []
@@ -106,7 +134,7 @@ class McpToolbox:
                 text = (text[:MAX_TOOL_RESULT_CHARS]
                         + '\n... [truncated: ask for a smaller limit or a '
                           'narrower query to see the rest]')
-            ok = not getattr(result, "is_error", False)
+            ok = not getattr(result, "is_error", False) and not _payload_is_error(text)
             self.calls.append(ToolCallRecord(
                 tool=name, arguments=arguments or {}, ok=ok,
                 latency_ms=int((time.perf_counter() - started) * 1000),

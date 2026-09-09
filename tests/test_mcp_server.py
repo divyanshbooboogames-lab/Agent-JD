@@ -90,3 +90,56 @@ async def test_database_is_opened_read_only(fixture_db):
         conn.execute("DELETE FROM companies")
     assert "readonly" in str(excinfo.value).lower()
     conn.close()
+
+
+async def test_enumerable_arguments_are_constrained_in_the_schema(mcp_app):
+    """A live run had the model call screen_sector with persona="private
+    equity", which cost a wasted round trip. Enumerating the valid values in
+    the schema makes that call unrepresentable rather than merely discouraged."""
+    async with Client(mcp_app) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+
+    screen = tools["screen_sector"].input_schema["properties"]
+    assert set(screen["persona"]["enum"]) == {
+        "mutual_fund_analyst", "equity_analyst", "pe_analyst"}
+    assert set(screen["sector"]["enum"]) == {
+        "tech", "retail", "manufacturing", "logistics"}
+
+
+async def test_a_tool_error_payload_is_recorded_as_a_failed_call(mcp_app):
+    """The response's tool log is the one part a model cannot overstate, so a
+    tool that reports a bad argument must not be logged as a success.
+
+    MCP's own `is_error` does not cover this: the tool returns normally, with a
+    payload describing the failure.
+    """
+    from agentjd.agent.mcp_client import open_toolbox
+
+    async with open_toolbox(mcp_app) as toolbox:
+        payload = await toolbox.call_json(
+            "screen_sector",
+            {"sector": "logistics", "persona": "mutual_fund_analyst"})
+        assert "error" not in payload
+        assert toolbox.calls[-1].ok is True
+
+        # A tool that validates its own arguments and answers with an error
+        # payload -- a normal protocol response, so MCP's is_error is unset.
+        text, ok = await toolbox.call("compare_companies", {"tickers": []})
+        assert '"error"' in text
+        assert ok is False, "an error payload must be recorded as a failed call"
+        assert toolbox.calls[-1].ok is False
+
+        # Schema rejection is a different path and must also count as failed.
+        _, ok = await toolbox.call("get_sector_benchmarks", {"sector": "biotech"})
+        assert ok is False
+        assert toolbox.calls[-1].ok is False
+
+
+async def test_absent_records_are_not_treated_as_errors(mcp_app):
+    """`in_database: false` is a correct answer, not a tool failure."""
+    from agentjd.agent.mcp_client import open_toolbox
+
+    async with open_toolbox(mcp_app) as toolbox:
+        payload = await toolbox.call_json("find_company", {"query": "Ferrari"})
+        assert payload["in_database"] is False
+        assert toolbox.calls[-1].ok is True

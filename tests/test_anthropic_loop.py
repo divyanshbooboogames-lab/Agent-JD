@@ -209,17 +209,38 @@ async def test_empty_response_is_reported(mcp_app):
 
 
 async def test_failing_tool_is_reported_to_the_model_as_an_error(mcp_app):
-    """A bad tool argument must come back as an error result the model can
-    recover from, not kill the request."""
+    """A bad tool argument must come back marked as an error the model can
+    recover from, not kill the request.
+
+    `sector` is schema-constrained, so an invalid value is rejected before the
+    query layer sees it. What matters either way is that the tool_result
+    carries is_error and the call is logged as failed -- a live run showed the
+    model passing persona="private equity" and the trace recording it as a
+    success.
+    """
     answer, client, tool_calls = await run_loop(mcp_app, [
         tool_message("screen_sector", {"sector": "nonexistent",
                                        "persona": "pe_analyst"}),
         answer_message(),
     ])
     result_block = client.requests[1].messages[-1]["content"][0]
-    payload = json.loads(result_block["content"])
-    assert payload["error"] == "unknown_sector"
+    assert result_block["is_error"] is True
+    assert tool_calls[0].ok is False
     assert answer.answer == "Scripted analysis."
+
+
+async def test_a_handled_error_payload_also_marks_the_call_failed(mcp_app):
+    """The subtler case: the tool returns normally and reports the problem in
+    its payload, so MCP's own is_error is unset."""
+    answer, client, tool_calls = await run_loop(mcp_app, [
+        tool_message("compare_companies", {"tickers": []}),
+        answer_message(),
+    ])
+    result_block = client.requests[1].messages[-1]["content"][0]
+    payload = json.loads(result_block["content"])
+    assert payload["error"] == "no_tickers_supplied"
+    assert result_block["is_error"] is True
+    assert tool_calls[0].ok is False
 
 
 async def test_unknown_tool_name_does_not_crash_the_loop(mcp_app):
